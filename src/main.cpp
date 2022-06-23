@@ -559,6 +559,9 @@ int main(int argc, char *argv[])
 
         for (int i = 0; i < tracks.size(); i++)
         {
+            for (auto keypoint : keypoint_collection.get_keypoints()) { 
+                keypoint.inc();
+            }
             motions.push_back(BoundingBoxMotion(
                 startings[i],
                 endings[i].second,
