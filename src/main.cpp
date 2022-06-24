@@ -15,6 +15,8 @@
 #include <future>
 #include "geometry_utils.hpp"
 #include "pairings.hpp"
+#include "video_tracker.hpp"
+#include "color_picker.hpp"
 
 cv::Rect create_rect_from_keypoint(cv::KeyPoint keypoint);
 
@@ -422,7 +424,7 @@ int main(int argc, char *argv[])
     }
     else
     {
-        path = "60-fps-trail.mp4";
+        path = "../60-fps-2.mp4";
     }
 
     std::vector<std::pair<cv::Rect, cv::Ptr<cv::Tracker>>> tracks;
@@ -472,6 +474,11 @@ int main(int argc, char *argv[])
     cv::Ptr<cv::SimpleBlobDetector>
         blob_detector = cv::SimpleBlobDetector::create(params);
 
+
+    auto rect = cv::Rect(0, 0, frame.cols / 2 , frame.rows / 2 );
+    cv::Mat fcp = frame.operator()(rect).clone();
+    VideoTracker vidtrack = VideoTracker(fcp, blob_detector);
+
     KeyPointCollection keypoint_collection(blob_detector);
 
     // std::vector<cv::KeyPoint> keypoints;
@@ -511,6 +518,19 @@ int main(int argc, char *argv[])
         std::vector<BoundingBoxMotion> motions;
 
         frame << frame_queue;
+
+        // std::cout << "cols: " << frame.cols << std::endl;
+        // std::cout << "rows: " << frame.rows << std::endl;
+        // fcp = frame.operator()(rect).clone();
+        vidtrack.process_frame(frame);
+        vidtrack.view_current_frame(frame, "modern");
+
+        int k = cv::waitKey(1);
+        if (k == 27)
+        {
+            break;
+        }
+        /*
         // cv::Mat after;
         // frame = cv::threshold(frame, after, 70, 255, cv::ThresholdTypes::THRESH_BINARY);
 
@@ -791,6 +811,7 @@ int main(int argc, char *argv[])
         // https://www.reddit.com/r/C_Programming/comments/502xun/how_do_i_clear_a_line_on_console_in_c/
         // fprintf(stderr, "\x1b[1F"); // Move to beginning of previous line
         // fprintf(stderr, "\x1b[2K"); // Clear entire line
+        */
         std::cerr << "frame: " << ++frame_count << std::endl;
     }
 

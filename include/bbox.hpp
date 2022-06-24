@@ -18,7 +18,7 @@ public:
     BBox(cv::Rect rect) : rect(rect)
     {
     }
-
+    
     cv::Rect as_rect() const
     {
         return rect;
@@ -85,5 +85,15 @@ public:
     float distance_squared(BBox other)
     {
         return GeometryUtils::distance_squared(center(), other.center());
+    }
+
+    /**
+     * @brief Calculates the distance squared from the center of the box to the point
+     * 
+     * @param point the point to detect
+     * @return float how far away the point is
+     */
+    float distance_squared(cv::Point2f point) { 
+        return GeometryUtils::distance_squared(center(), point);
     }
 };
