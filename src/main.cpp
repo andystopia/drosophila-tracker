@@ -13,27 +13,10 @@
 #include "msd/channel.hpp"
 #include <chrono>
 #include <future>
+#include "geometry_utils.hpp"
+#include "pairings.hpp"
 
 cv::Rect create_rect_from_keypoint(cv::KeyPoint keypoint);
-
-class GeometryUtils
-{
-public:
-    static float mag_squared(cv::Point2f point)
-    {
-        return point.x * point.x + point.y * point.y;
-    }
-    static float distance_squared(cv::Point2f a, cv::Point2f b)
-    {
-        cv::Point2f d = a - b;
-        return d.x * d.x + d.y * d.y;
-    }
-
-    static float distance(cv::Point2f a, cv::Point2f b)
-    {
-        return std::sqrt(distance_squared(a, b));
-    }
-};
 
 class BoundingBox
 {
@@ -240,7 +223,9 @@ cv::Rect create_rect_from_keypoint(cv::KeyPoint keypoint)
     cv::Point2f point = keypoint.pt;
 
     float size = keypoint.size;
-    return cv::Rect(point.x - size, point.y - size, size * 1.75, size * 1.75);
+    float size_k = 0.80f;
+
+    return cv::Rect(point.x - size * size_k, point.y - size * size_k, size * size_k * 2, size * size_k * 2);
 }
 
 class CountingKeyPoint
@@ -274,9 +259,11 @@ class KeyPointCollection
 {
 private:
     std::vector<CountingKeyPoint> keypoints;
+    cv::Ptr<cv::SimpleBlobDetector> detector;
+    std::vector<cv::KeyPoint> keypoint_cache;
 
 public:
-    KeyPointCollection()
+    KeyPointCollection(cv::Ptr<cv::SimpleBlobDetector> detector) : detector(detector)
     {
     }
 
@@ -285,9 +272,28 @@ public:
         keypoints.clear();
     }
 
+    void detect(cv::Mat &img)
+    {
+        keypoint_cache.clear();
+        detector->detect(img, keypoint_cache);
+        update_keypoints();
+    }
+
+    void update_keypoints()
+    {
+        clear();
+        std::transform(
+            keypoint_cache.cbegin(),
+            keypoint_cache.cend(),
+            std::back_inserter(keypoints),
+            [](cv::KeyPoint const &point)
+            {
+                return CountingKeyPoint(point);
+            });
+    }
     void reset_with_keypoints(std::vector<cv::KeyPoint> &keys)
     {
-        this->clear();
+        clear();
         std::transform(
             keys.cbegin(),
             keys.cend(),
@@ -301,6 +307,17 @@ public:
     CountingKeyPoint const &at(size_t i)
     {
         return keypoints.at(i);
+    }
+
+    std::vector<cv::Rect> as_rects()
+    {
+        std::vector<cv::Rect> rects;
+
+        rects.reserve(keypoints.size());
+        std::transform(keypoints.cbegin(), keypoints.cend(), std::back_inserter(rects), [](const auto &point)
+                       { return create_rect_from_keypoint(point.get_keypoint()); });
+
+        return rects;
     }
 
     /**
@@ -361,8 +378,6 @@ public:
     }
 };
 
-
-
 void frame_reader(cv::VideoCapture capture, msd::channel<cv::Mat> &frame_queue)
 {
     cv::Mat image;
@@ -388,7 +403,6 @@ std::pair<bool, cv::Rect> execute_track(cv::Ptr<cv::Tracker> &tracker, cv::Mat c
     auto keypoint_detection_f = high_resolution_clock::now();
 
     duration<double, std::milli> keypoint_time = keypoint_detection_f - keypoint_detection_i;
-
 
     return {is_ok, box};
 }
@@ -439,7 +453,6 @@ int main(int argc, char *argv[])
 
     // Uncomment the line below to select a different bounding box
     // cv::Rect2d bbox = cv::selectROI(frame, true, true);
-    std::vector<cv::Rect2i> rects;
 
     // cv::selectROIs("Select ROIs", frame, rects, false, true);
 
@@ -459,15 +472,21 @@ int main(int argc, char *argv[])
     cv::Ptr<cv::SimpleBlobDetector>
         blob_detector = cv::SimpleBlobDetector::create(params);
 
-    std::vector<cv::KeyPoint> keypoints;
+    KeyPointCollection keypoint_collection(blob_detector);
 
-    blob_detector->detect(frame, keypoints);
+    // std::vector<cv::KeyPoint> keypoints;
+
+    // blob_detector->detect(frame, keypoints);
     // std::cerr << keypoints.size() << std::endl;
 
-    for (auto keypoint : keypoints)
-    {
-        rects.push_back(create_rect_from_keypoint(keypoint));
-    }
+    // std::vector<cv::Rect2i> rects;
+    // for (auto keypoint : keypoints)
+    // {
+    //     rects.push_back(create_rect_from_keypoint(keypoint));
+    // }
+
+    keypoint_collection.detect(frame);
+    std::vector<cv::Rect> rects = keypoint_collection.as_rects();
 
     // Display bounding box.
     // cv::rectangle(frame, bbox, cv::Scalar(255, 0, 0), 2, 1);
@@ -478,11 +497,9 @@ int main(int argc, char *argv[])
         tracker->init(frame, rect);
         tracks.push_back(std::make_pair(rect, tracker));
     }
-
     imshow("Tracking", frame);
 
     // cv::waitKey(0);
-    KeyPointCollection keypoint_collection;
 
     int frame_count = 0;
     // while (vid.read(frame))
@@ -502,20 +519,16 @@ int main(int argc, char *argv[])
         // double timer = (double)cv::getTickCount();
 
         // auto keypoint_detection_i = high_resolution_clock::now();
-        keypoints.clear();
-        blob_detector->detect(frame, keypoints);
+        // keypoints.clear();
+        // blob_detector->detect(frame, keypoints);
         // auto keypoint_detection_f = high_resolution_clock::now();
 
         // duration<double, std::milli> keypoint_time = keypoint_detection_f - keypoint_detection_i;
 
         // std::cerr << "KeyPoint Detection: " << keypoint_time.count() << "ms\n";
 
-        keypoint_collection.reset_with_keypoints(keypoints);
-
-        for (cv::KeyPoint &kp : keypoints)
-        {
-            cv::circle(frame, kp.pt, kp.size, cv::Scalar(0, 255, 0));
-        }
+        // keypoint_collection.reset_with_keypoints(keypoints);
+        keypoint_collection.detect(frame);
 
         auto tracker_i = high_resolution_clock::now();
 
@@ -559,7 +572,8 @@ int main(int argc, char *argv[])
 
         for (int i = 0; i < tracks.size(); i++)
         {
-            for (auto keypoint : keypoint_collection.get_keypoints()) { 
+            for (auto keypoint : keypoint_collection.get_keypoints())
+            {
                 keypoint.inc();
             }
             motions.push_back(BoundingBoxMotion(
@@ -635,6 +649,7 @@ int main(int argc, char *argv[])
 
         std::cerr << "Tracker Detection Time: " << tracker_time.count() << "ms\n";
 
+        auto analysis_i = high_resolution_clock::now();
         // optimally this would be done with the kuhn munkres (hungarian)
         // selection algorithm to properly minimize error
         for (size_t i = 0; i < motions.size(); i++)
@@ -664,7 +679,7 @@ int main(int argc, char *argv[])
             rectangle(frame, delta.get_endpoint().as_rect(), cv::Scalar(255, 0, 0), 2, 1);
         }
 
-        std::vector<std::pair<BoundingBoxMotion &, BoundingBoxMotion &>> motion_pairs = pair_with_nearest<BoundingBoxMotion>(
+        std::vector<std::pair<BoundingBoxMotion &, BoundingBoxMotion &>> motion_pairs = PairingUtils::pair_with_nearest<BoundingBoxMotion>(
             motions,
             [](BoundingBoxMotion const &src, BoundingBoxMotion const &possible_a, BoundingBoxMotion const &possible_b) -> bool
             {
@@ -746,6 +761,10 @@ int main(int argc, char *argv[])
         //     // }
         // }
 
+        for (CountingKeyPoint &kp : keypoint_collection.get_keypoints())
+        {
+            cv::circle(frame, kp.get_keypoint().pt, kp.get_keypoint().size, cv::Scalar(0, 255, 0));
+        }
         // Display tracker type on frame
         putText(frame, "CRST Tracker", cv::Point(70, 20), cv::FONT_HERSHEY_SIMPLEX, 0.75, cv::Scalar(50, 170, 50), 2);
 
@@ -761,6 +780,8 @@ int main(int argc, char *argv[])
                        { return motion.get_endpoint().center(); });
 
         tracked_points.push_back(this_frame_tracked_points);
+
+        auto analysis_f = high_resolution_clock::now();
         // Exit if ESC pressed.
         int k = cv::waitKey(1);
         if (k == 27)
@@ -768,8 +789,8 @@ int main(int argc, char *argv[])
             break;
         }
         // https://www.reddit.com/r/C_Programming/comments/502xun/how_do_i_clear_a_line_on_console_in_c/
-        fprintf(stderr, "\x1b[1F"); // Move to beginning of previous line
-        fprintf(stderr, "\x1b[2K"); // Clear entire line
+        // fprintf(stderr, "\x1b[1F"); // Move to beginning of previous line
+        // fprintf(stderr, "\x1b[2K"); // Clear entire line
         std::cerr << "frame: " << ++frame_count << std::endl;
     }
 
