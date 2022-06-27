@@ -8,6 +8,10 @@
 #include <opencv2/tracking.hpp>
 #include <opencv2/features2d.hpp>
 #include "color_picker.hpp"
+#include <future>
+#include <fstream>
+
+#include <execution>
 
 using TrackerSingleFrameInfoRef = std::reference_wrapper<TrackerSingleFrameInfo>;
 using KeyPointRef = std::reference_wrapper<cv::KeyPoint>;
@@ -48,11 +52,26 @@ std::vector<TrackerSingleFrameInfo> &VideoTracker::detect_current_tracker_positi
     current_frame_infos.clear();
 
     // std::cout << " Detecting " << trackers.size() << " # of keypoints" << std::endl;
+    // for (Tracker &tracker : trackers)
+    // {
+    //     current_frame_infos.push_back(tracker.track(img));
+    // }
+
+    std::vector<std::future<TrackerSingleFrameInfo>> futures;
+    futures.reserve(trackers.size());
+
     for (Tracker &tracker : trackers)
     {
-        current_frame_infos.push_back(tracker.track(img));
+        Tracker &track = tracker;
+        futures.push_back(std::async(std::launch::async, [&]()
+                                     { return track.track(img); }));
     }
 
+    for (std::future<TrackerSingleFrameInfo> &future : futures)
+    {
+        TrackerSingleFrameInfo val = future.get();
+        current_frame_infos.push_back(val);
+    }
     return current_frame_infos;
 }
 
@@ -141,6 +160,7 @@ void VideoTracker::process_frame(cv::Mat &img)
     detect_current_tracker_positions(img);
     fix_lost_trackers(img, current_frame_infos, current_frame_keypoints);
     fix_overlaps(img);
+    minimize_nearby_swap_inertias(img);
     write_frame_data();
 }
 
@@ -220,7 +240,7 @@ void VideoTracker::fix_overlaps(cv::Mat &img)
             float dist_b = inf_b.current.distance_squared(keypoint.pt);
 
 
-            return inf_a.inertia() < inf_b.inertia(); });
+            return dist_a < dist_b; });
 
         info.at(info.size() - 1).get().reset_tracker_position(img, zero.get().first);
     }
@@ -241,4 +261,130 @@ void VideoTracker::view_current_frame(cv::Mat &frame, const std::string &window_
         cv::circle(frame, kp.pt, kp.size, cv::Scalar(0, 255, 0));
     }
     cv::imshow(window_name, frame);
+}
+
+template <class PairElement>
+using Pairings = std::vector<std::pair<PairElement, PairElement>>;
+
+template <class PairType>
+using Pair = std::pair<PairType, PairType>;
+
+void VideoTracker::minimize_nearby_swap_inertias(cv::Mat &img)
+{
+    Pairings<TrackerSingleFrameInfo &> pairings =
+        PairingUtils::pair_with_nearest<TrackerSingleFrameInfo, float>(
+            current_frame_infos,
+            [](const TrackerSingleFrameInfo &a, const TrackerSingleFrameInfo &b)
+            { return a.current.distance_squared(b.current); });
+
+    for (Pair<TrackerSingleFrameInfo &> pair : pairings)
+    {
+        TrackerSingleFrameInfo &first = pair.first;
+        TrackerSingleFrameInfo &second = pair.second;
+
+        float first_tracker_inertia = first.inertia();
+        float second_tracker_inertia = second.inertia();
+
+        float first_cross_inertia = first.current.distance_squared(second.previous);
+        float second_cross_inertia = second.current.distance_squared(first.previous);
+
+        if (first_cross_inertia + second_cross_inertia < first_tracker_inertia + second_tracker_inertia)
+        {
+            TrackerSingleFrameInfo::swap_tracker_positions(img, first, second);
+        }
+    }
+}
+
+class CSVWriter
+{
+private:
+public:
+    CSVWriter()
+    {
+    }
+
+    void write(std::ostream &output, size_t num_rows, size_t num_cols, std::vector<std::string> &headers, std::function<std::string(size_t, size_t)> data_accessor, bool write_row_numbers = false, std::string row_number_column_name = "row #")
+    {
+        if (num_rows < 1 || num_cols < 1)
+        {
+            throw new std::invalid_argument("both num_rows and num_cols passed to csv write must be >= 1");
+        }
+        if (headers.size() != num_cols)
+        {
+            throw new std::invalid_argument("headers must have same size as num_cols");
+        }
+
+        if (write_row_numbers)
+        {
+            output << row_number_column_name << ",";
+        }
+
+        for (size_t h = 0; h < headers.size(); h++)
+        {
+            output << headers[h];
+            if (h + 1 != headers.size())
+            {
+                output << ",";
+            }
+        }
+        output << std::endl;
+
+        for (size_t row = 0; row < num_rows; row++)
+        {
+            if (write_row_numbers)
+            {
+                output << row + 1 << ",";
+            }
+            for (size_t col = 0; col < num_cols; col++)
+            {
+                std::string cell = data_accessor(row, col);
+                output << cell;
+                if (col + 1 != num_cols)
+                {
+                    output << ",";
+                }
+            }
+            output << std::endl;
+        }
+    }
+};
+void VideoTracker::write_csv(std::string filename)
+{
+    CSVWriter writer;
+
+    std::ofstream output;
+    output.open(filename);
+    std::vector<std::string> headers;
+
+    for (size_t i = 0; i < trackers.size(); i++)
+    {
+        headers.push_back("fly #" + std::to_string(i + 1) + ".x");
+        headers.push_back("fly #" + std::to_string(i + 1) + ".y");
+    }
+    writer.write(
+        output, trackers.at(0).get_record_count(), trackers.size() * 2, headers, [&](size_t row, size_t col)
+        { 
+        size_t actual_col = col / 2;
+        size_t which = col % 2;
+
+        cv::Point2f point = trackers.at(actual_col).get_bbox_history().at(row).center();
+        if (which == 0) { 
+            return std::to_string(point.x);
+        } else { 
+            return std::to_string(point.y);
+        } },
+        true, "frame");
+
+    // for (size_t i = 0; i < trackers.at(0).get_record_count(); i++)
+    // {
+    //     output << i;
+    //     for (size_t j = 0; j < trackers.size(); j++)
+    //     {
+    //         cv::Point2f center = trackers.at(j).get_bbox_history().at(i).center();
+    //         output << "," << center.x << "," << center.y;
+    //     }
+
+    //     output << std::endl;
+    // }
+    // output.close();
 }

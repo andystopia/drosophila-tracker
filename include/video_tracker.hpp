@@ -86,6 +86,24 @@ private:
      * 
      */
     void write_frame_data();
+    
+    /**
+     * @brief If two trackers are close to each other,
+     * make sure that the nearest thing that they track 
+     * minimizes their inertias.
+     * 
+     * @param img 
+     */
+    void minimize_nearby_swap_inertias(cv::Mat& img);
+    /**
+     * @brief For any tracker whose nearest tracker
+     * is futher than epsilon away, attempt to recenter
+     * that tracker upon it's nearest tracking point, if 
+     * the tracking point is within delta.
+     * 
+     * @param img 
+     */
+    void use_local_recentering(cv::Mat& img);
 public:
     /**
      * @brief Construct a new Video Tracker with a first frame
@@ -95,5 +113,6 @@ public:
     VideoTracker(cv::Mat &first_frame, cv::Ptr<cv::SimpleBlobDetector> detector);
     void process_frame(cv::Mat& img);
     
+    void write_csv(std::string filename);
     void view_current_frame(cv::Mat& img, const std::string& window_name);
 };

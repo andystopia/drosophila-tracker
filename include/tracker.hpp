@@ -14,7 +14,7 @@ private:
     std::vector<BBox> previous_frames;
 
 private:
-    static cv::Rect create_rect_from_circle(cv::Point2f point, float radius, float radius_k = 0.80f)
+    static cv::Rect create_rect_from_circle(cv::Point2f point, float radius, float radius_k = 0.90f)
     {
 
         return cv::Rect(point.x - radius * radius_k, point.y - radius * radius_k, radius * radius_k * 2, radius * radius_k * 2);
@@ -35,6 +35,14 @@ public:
         previous_frames.push_back(BBox(rect));
     }
 
+    size_t get_record_count() { 
+        return previous_frames.size();
+    }
+
+
+    std::vector<BBox>& get_bbox_history() { 
+        return previous_frames;
+    }
     cv::Rect set_tracker_position(cv::Mat &img, cv::Rect rect)
     {
         tracker->init(img, rect);

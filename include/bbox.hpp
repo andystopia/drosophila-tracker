@@ -82,7 +82,7 @@ public:
         return proportion;
     }
 
-    float distance_squared(BBox other)
+    float distance_squared(BBox other) const
     {
         return GeometryUtils::distance_squared(center(), other.center());
     }

@@ -21,4 +21,6 @@ public:
     float inertia();
 
     void reset_tracker_position(cv::Mat& img, cv::KeyPoint keypoint);
+    void reset_tracker_position(cv::Mat& img, BBox bbox);
+    static void swap_tracker_positions(cv::Mat& img, TrackerSingleFrameInfo& first, TrackerSingleFrameInfo& second);
 };
